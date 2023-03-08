@@ -22,18 +22,26 @@ type F interface {
 
 type FixtureOpt func(f *baseFixture)
 
+// GetOK returns a fixture which responds to GET requests at the provided route with the provided response body, and
+// // status 200 OK.
 func GetOK(route string, body string, opts ...FixtureOpt) F {
 	return GetBytesOK(route, []byte(body), opts...)
 }
 
+// GetBytesOK returns a fixture which responds to GET requests at the provided route with the provided body,  and status
+// 200 OK.
 func GetBytesOK(route string, body []byte, opts ...FixtureOpt) F {
 	return BytesOK(route, http.MethodGet, body, opts...)
 }
 
+// BytesOK returns a fixture which responds to requests at the provided route and HTTP method with the provided body,
+// and status 200 OK.
 func BytesOK(route string, method string, body []byte, opts ...FixtureOpt) F {
 	return Bytes(route, method, http.StatusOK, body, opts...)
 }
 
+// Bytes returns a fixture which responds to requests with the provided route and HTTP method with the provided body and
+// status code.
 func Bytes(route, method string, responseCode int, body []byte, opts ...FixtureOpt) F {
 	result := &memFixture{
 		body: body,
@@ -62,7 +70,7 @@ func (s *memFixture) Run(t *testing.T, req *http.Request) *http.Response {
 		return nil
 	}
 	resp := s.baseFixture.Response()
-	resp.Body = &buffCloser{Buffer: bytes.NewBuffer(s.body)}
+	resp.Body = io.NopCloser(bytes.NewBuffer(s.body))
 	return resp
 }
 
@@ -98,42 +106,46 @@ func (bf *baseFixture) Response() *http.Response {
 }
 
 type Server struct {
-	s      *httptest.Server
+	*httptest.Server
 	t      *testing.T
 	routes map[string]F
 }
 
+// NewServer creates a new httpfixture.Server which responds to requests with the provided fixtures.
 func NewServer(fixtures ...F) *Server {
 	result := &Server{
 		routes: make(map[string]F),
 	}
-	result.s = httptest.NewUnstartedServer(result)
+	result.Server = httptest.NewUnstartedServer(result)
 	for _, f := range fixtures {
 		result.routes[routesKey(f.Method(), f.Route())] = f
 	}
 	return result
 }
 
+// Start starts the server, reporting assertions using the provided testing.T.
 func (s *Server) Start(t *testing.T) {
 	s.t = t
-	s.s.Start()
+	s.Server.Start()
 }
 
+// StartTLS starts the server in TLS mode, reporting assertions using the provided testing.T.
 func (s *Server) StartTLS(t *testing.T) {
 	s.t = t
-	s.s.StartTLS()
+	s.Server.StartTLS()
 }
 
 func (s *Server) Close() {
-	s.s.Close()
+	s.Server.Close()
 }
 
 func (s *Server) URL() string {
-	return s.s.URL
+	return s.Server.URL
 }
 
 type assert func(req *http.Request) error
 
+// ServeHTTP implements the http.Handler interface.
 func (s *Server) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 	if req.URL == nil {
 		s.t.Fatalf("nil request URL")
@@ -163,19 +175,6 @@ func (s *Server) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 
 func routesKey(method, route string) string {
 	return fmt.Sprintf("%s:%s", method, route)
-}
-
-// buffCloser creates a small io.ReadCloser around a bytes.Buffer.
-type buffCloser struct {
-	*bytes.Buffer
-}
-
-func (bc *buffCloser) Read(p []byte) (int, error) {
-	return bc.Buffer.Read(p)
-}
-
-func (bc *buffCloser) Close() error {
-	return nil
 }
 
 func standardizePath(path string) string {
