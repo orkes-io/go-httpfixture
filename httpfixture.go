@@ -7,10 +7,12 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"strings"
 	"testing"
 )
 
-// F is a simple HTTP fixture.
+// F is an HTTP fixture.
 type F interface {
 	// Run runs this fixture, exchanging the provided request for a response.
 	Run(t *testing.T, req *http.Request) *http.Response
@@ -20,6 +22,7 @@ type F interface {
 	Method() string
 }
 
+// FixtureOpt represents an optional parameter added to a fixture, usually request assertions.
 type FixtureOpt func(f *baseFixture)
 
 // GetOK returns a fixture which responds to GET requests at the provided route with the provided response body, and
@@ -43,21 +46,101 @@ func BytesOK(route string, method string, body []byte, opts ...FixtureOpt) F {
 // Bytes returns a fixture which responds to requests with the provided route and HTTP method with the provided body and
 // status code.
 func Bytes(route, method string, responseCode int, body []byte, opts ...FixtureOpt) F {
-	result := &memFixture{
-		body: body,
-		baseFixture: baseFixture{
-			method:       method,
-			route:        standardizePath(route),
-			responseCode: responseCode,
-		},
+	return &memFixture{
+		body:        body,
+		baseFixture: base(route, method, responseCode, opts...),
 	}
-	for _, opt := range opts {
-		opt(&result.baseFixture)
-	}
-	return result
 }
 
-// SmallFixture is for fixtures whose bodies fit in memory.
+// GetFileOK returns a fixture which responds to GET requests at the provided route with the contents of the provided
+// file and status 200 OK. The file at the provided path is read into memory by this func.
+func GetFileOK(route, method string, path string, opts ...FixtureOpt) F {
+	return FileOK(route, http.MethodGet, path, opts...)
+}
+
+// FileOK returns a fixture which responds to matching requests with the contents of the provided file and status 200
+// OK. The provided file is read into memory by this func.
+func FileOK(route, method string, path string, opts ...FixtureOpt) F {
+	return File(route, method, http.StatusOK, path, opts...)
+}
+
+// File returns a fixture which responds to matching requests with the contents of the provided file, which are read
+// into memory by this func.
+func File(route, method string, responseCode int, path string, opts ...FixtureOpt) F {
+	f, err := os.Open(path)
+	if err != nil {
+		panic(fmt.Errorf("error reading file: %w", err))
+	}
+	defer f.Close()
+	return Reader(route, method, responseCode, f, opts...)
+}
+
+// Reader returns a fixture which responds to matching requests with the contents of the provided reader, which are read
+// into memory by this func.
+func Reader(route, method string, responseCode int, reader io.Reader, opts ...FixtureOpt) F {
+	b, err := io.ReadAll(reader)
+	if err != nil {
+		panic(fmt.Errorf("error reading reader: %w", err))
+	}
+	return &memFixture{
+		body:        b,
+		baseFixture: base(route, method, responseCode, opts...),
+	}
+}
+
+func base(route, method string, responseCode int, opts ...FixtureOpt) baseFixture {
+	bf := baseFixture{
+		method:       method,
+		route:        standardizePath(route),
+		responseCode: responseCode,
+	}
+	for _, opt := range opts {
+		opt(&bf)
+	}
+	return bf
+}
+
+// AssertHeaderMatches asserts that the provided key, value pair is present in the headers of any incoming request.
+func AssertHeaderMatches(key, value string) FixtureOpt {
+	return func(f *baseFixture) {
+		f.assertions = append(f.assertions, func(req *http.Request) error {
+			vals := req.Header.Values(key)
+			for _, v := range vals {
+				if strings.EqualFold(v, value) {
+					return nil
+				}
+			}
+			return fmt.Errorf("could not find headers matching %s: %s", key, value)
+		})
+	}
+}
+
+// AssertBodyContains asserts all requests passed to this fixture include a body containing the provided string.
+func AssertBodyContains(str string) FixtureOpt {
+	return AssertBodyContainsBytes([]byte(str))
+}
+
+// AssertBodyContainsBytes asserts all requests passed to this fixture contains the provided byte sequence in their
+// body.
+func AssertBodyContainsBytes(b []byte) FixtureOpt {
+	return func(f *baseFixture) {
+		f.assertions = append(f.assertions, func(req *http.Request) error {
+			body := bytes.NewBuffer(make([]byte, req.ContentLength))
+			r := io.TeeReader(req.Body, body)
+			req.Body = io.NopCloser(body)
+			bodyBytes, err := io.ReadAll(r)
+			if err != nil {
+				return fmt.Errorf("error reading request body: %w", err)
+			}
+			if !bytes.Contains(bodyBytes, b) {
+				return errors.New("body did not contain expected bytes")
+			}
+			return nil
+		})
+	}
+}
+
+// memFixture is for fixtures whose response bodies fit in memory.
 type memFixture struct {
 	body []byte
 	baseFixture
@@ -65,21 +148,11 @@ type memFixture struct {
 
 // Run exchanges the provided request for an appropriate response.
 func (s *memFixture) Run(t *testing.T, req *http.Request) *http.Response {
-	if err := s.baseFixture.AssertAll(req); err != nil {
-		t.Fatalf("request failed assertions: %v", err)
-		return nil
-	}
-	resp := s.baseFixture.Response()
+	t.Helper()
+	s.baseFixture.assertAll(t, req)
+	resp := s.baseFixture.response()
 	resp.Body = io.NopCloser(bytes.NewBuffer(s.body))
 	return resp
-}
-
-func (s *memFixture) Route() string {
-	return s.route
-}
-
-func (s *memFixture) Method() string {
-	return s.method
 }
 
 type baseFixture struct {
@@ -89,20 +162,38 @@ type baseFixture struct {
 	assertions   []assert
 }
 
-func (bf *baseFixture) AssertAll(req *http.Request) error {
+// assertAll runs all request assertions against the provided incoming request. It fails and halts the current test if
+// any assertion fails.
+func (bf *baseFixture) assertAll(t *testing.T, req *http.Request) {
+	t.Helper()
 	var errs error
 	for _, a := range bf.assertions {
 		if err := a(req); err != nil {
 			errs = errors.Join(errs, err)
 		}
 	}
-	return errs
+	if errs != nil {
+		t.Logf("request failed assertions: %v", errs)
+		t.Fail()
+		return
+	}
 }
 
-func (bf *baseFixture) Response() *http.Response {
+// Response creates a new response populated with fields set in this baseFixture.
+func (bf *baseFixture) response() *http.Response {
 	return &http.Response{
 		StatusCode: bf.responseCode,
 	}
+}
+
+// Route returns the route used to trigger this fixture.
+func (bf *baseFixture) Route() string {
+	return bf.route
+}
+
+// Method returns the HTTP method used to trigger this fixture.
+func (bf *baseFixture) Method() string {
+	return bf.method
 }
 
 type Server struct {
@@ -135,10 +226,12 @@ func (s *Server) StartTLS(t *testing.T) {
 	s.Server.StartTLS()
 }
 
+// Close closes the underlying httptest.Server.
 func (s *Server) Close() {
 	s.Server.Close()
 }
 
+// URL retrieves the URL of this server, once it's been started.
 func (s *Server) URL() string {
 	return s.Server.URL
 }
@@ -148,7 +241,8 @@ type assert func(req *http.Request) error
 // ServeHTTP implements the http.Handler interface.
 func (s *Server) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 	if req.URL == nil {
-		s.t.Fatalf("nil request URL")
+		s.t.Logf("nil request URL")
+		s.t.Fail()
 		return
 	}
 	f, ok := s.routes[routesKey(req.Method, req.URL.Path)]
@@ -167,7 +261,8 @@ func (s *Server) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 	}
 	rw.WriteHeader(resp.StatusCode)
 	if _, err := io.Copy(rw, resp.Body); err != nil {
-		s.t.Fatalf("failed to copy response body: %v", err)
+		s.t.Logf("failed to copy response body: %v", err)
+		s.t.Fail()
 		return
 	}
 	return

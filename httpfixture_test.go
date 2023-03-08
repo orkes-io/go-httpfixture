@@ -20,11 +20,30 @@ func TestFixture(t *testing.T) {
 		wantCode  int
 	}{
 		{
+			name:      "GetOK",
 			reqMethod: http.MethodGet,
 			reqPath:   "/path",
 			reqBody:   nil,
 			fixture:   httpfixture.GetOK("/path", "hello world"),
 			wantBody:  "hello world",
+			wantCode:  http.StatusOK,
+		},
+		{
+			name:      "GetBytesOK",
+			reqMethod: http.MethodGet,
+			reqPath:   "/other/path",
+			reqBody:   nil,
+			fixture:   httpfixture.GetBytesOK("/other/path", []byte("some bytes")),
+			wantBody:  "some bytes",
+			wantCode:  http.StatusOK,
+		},
+		{
+			name:      "BytesOK",
+			reqMethod: http.MethodDelete,
+			reqPath:   "/other/path",
+			reqBody:   nil,
+			fixture:   httpfixture.BytesOK("/other/path", http.MethodDelete, []byte("moar bytes")),
+			wantBody:  "moar bytes",
 			wantCode:  http.StatusOK,
 		},
 	}
@@ -54,4 +73,87 @@ func TestFixture(t *testing.T) {
 			bytes.Equal([]byte(tt.wantBody), body)
 		})
 	}
+}
+
+func TestFixtureAssertions(t *testing.T) {
+	tests := []struct {
+		name        string
+		req         *http.Request
+		fixture     httpfixture.F
+		wantFailure bool
+	}{
+		{
+			name: "AssertBodyContains",
+			req: must(http.NewRequest("GET", "http://localhost:8080/path",
+				bytes.NewBufferString("the quick brown fox jumped over the"))),
+			fixture: httpfixture.GetOK("/path", "",
+				httpfixture.AssertBodyContains("quick brown fox")),
+		},
+		{
+			name: "AssertBodyContains failure",
+			req: must(http.NewRequest("GET", "http://localhost:8080/path/another",
+				bytes.NewBufferString("something else even"))),
+			fixture: httpfixture.GetOK("/path/another", "response body",
+				httpfixture.AssertBodyContains("quick brown fox")),
+			wantFailure: true,
+		},
+		{
+			name: "AssertBodyContainsBytes",
+			req: must(http.NewRequest("GET", "http://localhost:8080/path",
+				bytes.NewBufferString("some text\n\n\rother text here"))),
+			fixture: httpfixture.GetOK("/path", "",
+				httpfixture.AssertBodyContainsBytes([]byte("\n\n\r"))),
+		},
+		{
+			name: "AssertBodyContainsBytes failure",
+			req: must(http.NewRequest("GET", "http://localhost:8080/path",
+				bytes.NewBufferString(""))),
+			fixture: httpfixture.GetOK("/path", "",
+				httpfixture.AssertBodyContainsBytes([]byte("o"))),
+			wantFailure: true,
+		},
+		{
+			name: "AssertHeaderMatches",
+			req: withHeader(must(http.NewRequest("GET", "http://localhost:7070/path", nil)),
+				"Content-Type", "application/json"),
+			fixture: httpfixture.GetOK("/path", "",
+				httpfixture.AssertHeaderMatches("Content-Type", "application/json")),
+		},
+		{
+			name: "AssertHeaderMatches failure",
+			req:  must(http.NewRequest("GET", "http://localhost:7070/path", nil)),
+			fixture: httpfixture.GetOK("/path", "",
+				httpfixture.AssertHeaderMatches("Content-Type", "application/json")),
+			wantFailure: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			defer func() {
+				err := recover()
+				if err != nil && !tt.wantFailure {
+					t.Fatalf("caught panic in test: %v", err)
+				}
+			}()
+			testT := &testing.T{}
+			_ = tt.fixture.Run(testT, tt.req)
+
+			if tt.wantFailure != testT.Failed() {
+				t.Fatalf("unexpected failure reported; want: %t; got: %t", tt.wantFailure, testT.Failed())
+			}
+		})
+	}
+}
+
+func withHeader(req *http.Request, key, value string) *http.Request {
+	req.Header.Add(key, value)
+	return req
+}
+
+func must[T any](t T, err error) T {
+	if err != nil {
+		panic(fmt.Errorf("must had error: %v", err))
+	}
+	return t
 }
