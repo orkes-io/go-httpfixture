@@ -54,7 +54,7 @@ func Bytes(route, method string, responseCode int, body []byte, opts ...FixtureO
 
 // GetFileOK returns a fixture which responds to GET requests at the provided route with the contents of the provided
 // file and status 200 OK. The file at the provided path is read into memory by this func.
-func GetFileOK(route, method string, path string, opts ...FixtureOpt) F {
+func GetFileOK(route, path string, opts ...FixtureOpt) F {
 	return FileOK(route, http.MethodGet, path, opts...)
 }
 

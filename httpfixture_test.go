@@ -46,6 +46,42 @@ func TestFixture(t *testing.T) {
 			wantBody:  "moar bytes",
 			wantCode:  http.StatusOK,
 		},
+		{
+			name:      "Bytes",
+			reqMethod: http.MethodDelete,
+			reqPath:   "/other/path",
+			reqBody:   nil,
+			fixture:   httpfixture.Bytes("/other/path", http.MethodDelete, http.StatusCreated, []byte("moar bytes")),
+			wantBody:  "moar bytes",
+			wantCode:  http.StatusCreated,
+		},
+		{
+			name:      "GetFileOK",
+			reqMethod: http.MethodGet,
+			reqPath:   "/path2",
+			reqBody:   nil,
+			fixture:   httpfixture.GetFileOK("/path2", "testdata/basic-body.json"),
+			wantBody:  `{"foo":"bar","number":1}`,
+			wantCode:  http.StatusOK,
+		},
+		{
+			name:      "FileOK",
+			reqMethod: http.MethodPost,
+			reqPath:   "/path2",
+			reqBody:   nil,
+			fixture:   httpfixture.FileOK("/path2", http.MethodPost, "testdata/basic-body.json"),
+			wantBody:  `{"foo":"bar","number":1}`,
+			wantCode:  http.StatusOK,
+		},
+		{
+			name:      "FileOK",
+			reqMethod: http.MethodPost,
+			reqPath:   "/path2",
+			reqBody:   nil,
+			fixture:   httpfixture.File("/path2", http.MethodPost, http.StatusAccepted, "testdata/basic-body.json"),
+			wantBody:  `{"foo":"bar","number":1}`,
+			wantCode:  http.StatusAccepted,
+		},
 	}
 
 	for _, tt := range tests {
