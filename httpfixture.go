@@ -236,16 +236,15 @@ func (bf *baseFixture) Run(t *testing.T, req *http.Request) *http.Response {
 // any assertion fails.
 func (bf *baseFixture) assertAll(t *testing.T, req *http.Request) {
 	t.Helper()
-	var errs error
+	var failedAssert bool
 	for _, a := range bf.assertions {
 		if err := a(req); err != nil {
-			errs = errors.Join(errs, err)
+			t.Logf("request failed assertion: %v", err)
+			failedAssert = true
 		}
 	}
-	if errs != nil {
-		t.Logf("request failed assertions: %v", errs)
+	if failedAssert {
 		t.Fail()
-		return
 	}
 }
 
