@@ -1,3 +1,6 @@
+// Package httpfixture provides HTTP fixtures for testing code that makes requests via HTTP servers. It aims to provide
+// a more convenient abstraction than httptest, resulting in tests that use less code. All fixtures provided by this
+// package are logicless: responses from the fixture are fixed and do not depend on the incoming request.
 package httpfixture
 
 import (
@@ -25,8 +28,13 @@ type F interface {
 // FixtureOpt represents an optional parameter added to a fixture, usually request assertions.
 type FixtureOpt func(f *baseFixture)
 
+// OK returns a fixture which responds to any request at the provided route with the provided body and status 200 OK.
+func OK(route string, body string, opts ...FixtureOpt) F {
+	return BytesOK(route, "*", []byte(body), opts...)
+}
+
 // GetOK returns a fixture which responds to GET requests at the provided route with the provided response body, and
-// // status 200 OK.
+// status 200 OK.
 func GetOK(route string, body string, opts ...FixtureOpt) F {
 	return GetBytesOK(route, []byte(body), opts...)
 }
@@ -88,6 +96,30 @@ func Reader(route, method string, responseCode int, reader io.Reader, opts ...Fi
 	}
 }
 
+// Seq returns a fixture which responds with the provided list of fixtures, each of which is returned exactly once in
+// the order they are provided, except for the last fixture, which is returned as often as this fixture is called.
+//
+// All assertions on sub-fixtures of a Seq are run. However, the routes and methods of sub-fixtures are ignored when
+// run as part of a Seq.
+func Seq(route, method string, fixtures ...F) F {
+	return &multiFixture{
+		fixtures:    fixtures,
+		baseFixture: base(route, method, 0),
+	}
+}
+
+// NotFound returns a fixture which returns 404 Not Found in response to any request, along with an empty body.
+func NotFound(route, method string, opts ...FixtureOpt) F {
+	return ResponseCode(route, method, http.StatusNotFound, opts...)
+}
+
+// ResponseCode returns a fixture which returns the provided response code in response to any request, along with an
+// empty body.
+func ResponseCode(route, method string, responseCode int, opts ...FixtureOpt) F {
+	bf := base(route, method, responseCode, opts...)
+	return &bf
+}
+
 func base(route, method string, responseCode int, opts ...FixtureOpt) baseFixture {
 	bf := baseFixture{
 		method:       method,
@@ -98,6 +130,19 @@ func base(route, method string, responseCode int, opts ...FixtureOpt) baseFixtur
 		opt(&bf)
 	}
 	return bf
+}
+
+// AssertURLContains asserts that the URL passed contains the provided substring.
+func AssertURLContains(substr string) FixtureOpt {
+	return func(f *baseFixture) {
+		f.assertions = append(f.assertions, func(req *http.Request) error {
+			url := req.URL.String()
+			if !strings.Contains(url, substr) {
+				return fmt.Errorf("url %s did not contain %s", url, substr)
+			}
+			return nil
+		})
+	}
 }
 
 // AssertHeaderMatches asserts that the provided key, value pair is present in the headers of any incoming request.
@@ -140,6 +185,25 @@ func AssertBodyContainsBytes(b []byte) FixtureOpt {
 	}
 }
 
+// multiFixture serves a fixed sequence of fixtures. Each fixture is served once, except for the final fixture, which is
+// repeated forever.
+type multiFixture struct {
+	fixtures []F
+	next     int
+	baseFixture
+}
+
+// Run exchanges the provided request for an appropriate response.
+func (mf *multiFixture) Run(t *testing.T, req *http.Request) *http.Response {
+	t.Helper()
+	if mf.next == len(mf.fixtures) {
+		return mf.fixtures[len(mf.fixtures)-1].Run(t, req)
+	}
+	curr := mf.next
+	mf.next++
+	return mf.fixtures[curr].Run(t, req)
+}
+
 // memFixture is for fixtures whose response bodies fit in memory.
 type memFixture struct {
 	body []byte
@@ -160,6 +224,12 @@ type baseFixture struct {
 	method       string
 	responseCode int
 	assertions   []assert
+}
+
+func (bf *baseFixture) Run(t *testing.T, req *http.Request) *http.Response {
+	t.Helper()
+	bf.assertAll(t, req)
+	return bf.response()
 }
 
 // assertAll runs all request assertions against the provided incoming request. It fails and halts the current test if
@@ -199,19 +269,17 @@ func (bf *baseFixture) Method() string {
 type Server struct {
 	*httptest.Server
 	t      *testing.T
-	routes map[string]F
+	routes []F
 }
 
 // NewServer creates a new httpfixture.Server which responds to requests with the provided fixtures.
 func NewServer(fixtures ...F) *Server {
-	result := &Server{
-		routes: make(map[string]F),
-	}
-	result.Server = httptest.NewUnstartedServer(result)
+	var result Server
+	result.Server = httptest.NewUnstartedServer(&result)
 	for _, f := range fixtures {
-		result.routes[routesKey(f.Method(), f.Route())] = f
+		result.routes = append(result.routes, f)
 	}
-	return result
+	return &result
 }
 
 // Start starts the server, reporting assertions using the provided testing.T.
@@ -245,8 +313,15 @@ func (s *Server) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 		s.t.Fail()
 		return
 	}
-	f, ok := s.routes[routesKey(req.Method, req.URL.Path)]
-	if !ok {
+	var f F
+	for _, fixture := range s.routes {
+		m := fixture.Method()
+		if strings.HasPrefix(req.URL.Path, fixture.Route()) && (m == "*" || m == req.Method) {
+			f = fixture
+			break
+		}
+	}
+	if f == nil {
 		http.NotFound(rw, req)
 		return
 	}
@@ -260,16 +335,15 @@ func (s *Server) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 		}
 	}
 	rw.WriteHeader(resp.StatusCode)
+	if resp.Body == nil {
+		return
+	}
 	if _, err := io.Copy(rw, resp.Body); err != nil {
 		s.t.Logf("failed to copy response body: %v", err)
 		s.t.Fail()
 		return
 	}
 	return
-}
-
-func routesKey(method, route string) string {
-	return fmt.Sprintf("%s:%s", method, route)
 }
 
 func standardizePath(path string) string {

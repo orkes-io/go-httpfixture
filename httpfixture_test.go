@@ -20,6 +20,42 @@ func TestFixture(t *testing.T) {
 		wantCode  int
 	}{
 		{
+			name:      "OK wildcard POST",
+			reqMethod: http.MethodPost,
+			reqPath:   "/path/subpath",
+			reqBody:   nil,
+			fixture:   httpfixture.OK("/path", "hello world"),
+			wantBody:  "hello world",
+			wantCode:  http.StatusOK,
+		},
+		{
+			name:      "OK wildcard DELETE",
+			reqMethod: http.MethodDelete,
+			reqPath:   "/path",
+			reqBody:   nil,
+			fixture:   httpfixture.OK("/path", "hello world"),
+			wantBody:  "hello world",
+			wantCode:  http.StatusOK,
+		},
+		{
+			name:      "GetOK",
+			reqMethod: http.MethodGet,
+			reqPath:   "/path",
+			reqBody:   nil,
+			fixture:   httpfixture.GetOK("/path", "hello world"),
+			wantBody:  "hello world",
+			wantCode:  http.StatusOK,
+		},
+		{
+			name:      "GetOK with subpath",
+			reqMethod: http.MethodGet,
+			reqPath:   "/path/subpath",
+			reqBody:   nil,
+			fixture:   httpfixture.GetOK("/path", "hello world"),
+			wantBody:  "hello world",
+			wantCode:  http.StatusOK,
+		},
+		{
 			name:      "GetOK",
 			reqMethod: http.MethodGet,
 			reqPath:   "/path",
@@ -82,6 +118,22 @@ func TestFixture(t *testing.T) {
 			wantBody:  `{"foo":"bar","number":1}`,
 			wantCode:  http.StatusAccepted,
 		},
+		{
+			name:      "NotFound",
+			reqMethod: http.MethodDelete,
+			reqPath:   "/path2",
+			reqBody:   nil,
+			fixture:   httpfixture.NotFound("/path2", http.MethodDelete),
+			wantCode:  http.StatusNotFound,
+		},
+		{
+			name:      "ResponseCode",
+			reqMethod: http.MethodPut,
+			reqPath:   "/path",
+			reqBody:   nil,
+			fixture:   httpfixture.ResponseCode("/path", http.MethodPut, 755),
+			wantCode:  755,
+		},
 	}
 
 	for _, tt := range tests {
@@ -108,6 +160,38 @@ func TestFixture(t *testing.T) {
 			}
 			bytes.Equal([]byte(tt.wantBody), body)
 		})
+	}
+}
+
+func TestSeq(t *testing.T) {
+	s := httpfixture.NewServer(httpfixture.Seq("/path", "GET",
+		httpfixture.OK("", "body1"),
+		httpfixture.OK("", "body2"),
+		httpfixture.OK("", "body3"),
+		httpfixture.OK("", "body4"),
+	))
+	s.Start(t)
+	defer s.Close()
+
+	for i := 0; i < 4; i++ {
+		resp, err := http.Get(fmt.Sprintf("%s/path", s.URL()))
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		actualBody := string(must(io.ReadAll(resp.Body)))
+		if actualBody != fmt.Sprintf("body%d", i+1) {
+			t.Fatalf("want: body%d; got: '%v'", i+1, actualBody)
+		}
+	}
+	for i := 0; i < 5; i++ {
+		resp, err := http.Get(fmt.Sprintf("%s/path", s.URL()))
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		actualBody := string(must(io.ReadAll(resp.Body)))
+		if actualBody != "body4" {
+			t.Fatalf("want: 'body4'; got: '%v'", actualBody)
+		}
 	}
 }
 
@@ -160,6 +244,19 @@ func TestFixtureAssertions(t *testing.T) {
 			req:  must(http.NewRequest("GET", "http://localhost:7070/path", nil)),
 			fixture: httpfixture.GetOK("/path", "",
 				httpfixture.AssertHeaderMatches("Content-Type", "application/json")),
+			wantFailure: true,
+		},
+		{
+			name: "AssertURLContains",
+			req:  must(http.NewRequest("GET", "http://localhost:7070/tasks/1234/status", nil)),
+			fixture: httpfixture.GetOK("/path", "",
+				httpfixture.AssertURLContains("tasks/1234/")),
+		},
+		{
+			name: "AssertURLContains",
+			req:  must(http.NewRequest("GET", "http://localhost:7070/tasks/1234/status", nil)),
+			fixture: httpfixture.GetOK("/path", "",
+				httpfixture.AssertURLContains("tasks/4567/")),
 			wantFailure: true,
 		},
 	}
