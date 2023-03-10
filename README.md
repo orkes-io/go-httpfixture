@@ -2,7 +2,7 @@
 Go helpers for unit testing using dead simple HTTP fixtures.
 
 ![GitHub tag (latest SemVer)](https://img.shields.io/github/v/tag/orkes-io/go-httpfixture?sort=semver)
-![GitHub branch checks state](https://img.shields.io/github/checks-status/orkes-io/go-httpfixture/main)
+![GitHub Workflow Status (with event)](https://img.shields.io/github/actions/workflow/status/orkes-io/go-httpfixture/ci.yml)
 ![GitHub](https://img.shields.io/github/license/orkes-io/go-httpfixture)
 
 ## Usage
