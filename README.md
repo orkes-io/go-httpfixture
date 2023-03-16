@@ -47,7 +47,10 @@ The above test starts a server which contains a single fixture, makes a GET requ
 success completed succesfully.
 
 httpfixture serves as a terser alternative to [net/http/httptest](pkg.go.dev/net/http/httptest), which may be better
-suited to table-driven tests. All contributions are welcome! Please read the 
+suited to table-driven tests. 
+
+## Contributing
+All contributions are welcome! Please read the 
 [Contributor Covenant Code of Conduct](https://github.com/orkes-io/.github/blob/main/CODE_OF_CONDUCT.md) prior to
 contributing.
 
